@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Liar_Stock_Server/Liar_Stock_Server.vcxproj" />
+</Solution>
