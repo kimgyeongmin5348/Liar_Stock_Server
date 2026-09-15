@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="Liar_Stock_Server/Liar_Stock_Server.vcxproj" />
+  <Project Path="Liar_Stock_Server/Liar_Stock_Server.vcxproj" Id="b359ba04-848a-49de-8f6b-1b367f623007" />
 </Solution>

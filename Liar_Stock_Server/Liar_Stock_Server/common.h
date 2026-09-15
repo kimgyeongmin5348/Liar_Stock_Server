@@ -8,7 +8,11 @@
 #include <unordered_map>
 #include <WS2tcpip.h>
 #include <atomic>
+#include <array>
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <mutex>
 #include <shared_mutex>
 #include <random>
 #include <thread>
@@ -37,4 +41,3 @@
 #pragma comment (lib, "WS2_32.LIB")
 #pragma comment (lib, "MSWSock.LIB")
 
-using namespace std;
