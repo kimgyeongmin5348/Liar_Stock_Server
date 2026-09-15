@@ -10,11 +10,11 @@
 #define BUF_SIZE 1024
 #define MAX_BUFFER 8192
 
-constexpr std::size_t INITIAL_ACCEPT_COUNT = 16;
-constexpr std::size_t RECV_BUFFER_SIZE = MAX_BUFFER;
-constexpr std::size_t MAX_ID_LENGTH = 20;
+constexpr size_t INITIAL_ACCEPT_COUNT = 16;
+constexpr size_t RECV_BUFFER_SIZE = MAX_BUFFER;
+constexpr size_t MAX_ID_LENGTH = 20;
 
-enum class PacketType : std::uint8_t
+enum class PacketType : uint8_t
 {
 	CS_PING = 1,
 	SC_PONG = 2,
@@ -23,8 +23,8 @@ enum class PacketType : std::uint8_t
 #pragma pack(push, 1)
 struct PacketHeader
 {
-	std::uint8_t size;
-	std::uint8_t type;
+	uint8_t size;
+	uint8_t type;
 };
 #pragma pack(pop)
 

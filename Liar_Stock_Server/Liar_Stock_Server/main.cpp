@@ -1,34 +1,31 @@
 #include "workerthread.h"
 
-namespace
+atomic_uint g_worker_count = 0;
+
+BOOL WINAPI ConsoleHandler(DWORD signal)
 {
-	std::atomic_uint g_worker_count{ 0 };
-
-	BOOL WINAPI ConsoleHandler(DWORD signal)
-	{
-		if (signal != CTRL_C_EVENT && signal != CTRL_CLOSE_EVENT && signal != CTRL_BREAK_EVENT) {
-			return FALSE;
-		}
-		if (!g_running.exchange(false)) return TRUE;
-
-		if (g_listen_socket != INVALID_SOCKET) {
-			closesocket(g_listen_socket);
-			g_listen_socket = INVALID_SOCKET;
-		}
-		if (g_hIOCP != nullptr) {
-			for (unsigned i = 0; i < g_worker_count.load(); ++i) {
-				PostQueuedCompletionStatus(g_hIOCP, 0, 0, nullptr);
-			}
-		}
-		return TRUE;
+	if (signal != CTRL_C_EVENT && signal != CTRL_CLOSE_EVENT && signal != CTRL_BREAK_EVENT) {
+		return FALSE;
 	}
+	if (!g_running.exchange(false)) return TRUE;
+
+	if (g_listen_socket != INVALID_SOCKET) {
+		closesocket(g_listen_socket);
+		g_listen_socket = INVALID_SOCKET;
+	}
+	if (g_hIOCP != nullptr) {
+		for (unsigned i = 0; i < g_worker_count.load(); ++i) {
+			PostQueuedCompletionStatus(g_hIOCP, 0, 0, nullptr);
+		}
+	}
+	return TRUE;
 }
 
 int main()
 {
 	WSADATA wsa_data{};
 	if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-		std::cerr << "[ERROR] WSAStartup failed\n";
+		cerr << "[ERROR] WSAStartup failed\n";
 		return 1;
 	}
 
@@ -72,16 +69,16 @@ int main()
 		return exit_code;
 	}
 
-	const unsigned hardware_threads = std::thread::hardware_concurrency();
-	const unsigned worker_count = (std::max)(1u, (std::min)(8u, hardware_threads));
-	std::vector<std::thread> workers;
+	const unsigned hardware_threads = thread::hardware_concurrency();
+	const unsigned worker_count = (max)(1u, (min)(8u, hardware_threads));
+	vector<thread> workers;
 	workers.reserve(worker_count);
 	g_worker_count.store(worker_count);
 	SetConsoleCtrlHandler(ConsoleHandler, TRUE);
 	for (unsigned i = 0; i < worker_count; ++i) workers.emplace_back(WorkerThread);
 
-	std::size_t posted_accepts = 0;
-	for (std::size_t i = 0; i < INITIAL_ACCEPT_COUNT; ++i) {
+	size_t posted_accepts = 0;
+	for (size_t i = 0; i < INITIAL_ACCEPT_COUNT; ++i) {
 		if (do_accept(g_listen_socket)) ++posted_accepts;
 	}
 	if (posted_accepts == 0) {
@@ -91,7 +88,7 @@ int main()
 		}
 	}
 	else {
-		std::cout << "IOCP server listening on port " << SERVER_PORT
+		cout << "IOCP server listening on port " << SERVER_PORT
 			<< " (workers=" << worker_count << ", accepts=" << posted_accepts
 			<< "). Press Ctrl+C to stop.\n";
 		exit_code = 0;
@@ -101,10 +98,10 @@ int main()
 	g_worker_count.store(0);
 	SetConsoleCtrlHandler(ConsoleHandler, FALSE);
 
-	std::vector<std::shared_ptr<SESSION>> sessions;
+	vector<shared_ptr<SESSION>> sessions;
 	{
-		std::lock_guard lock(g_sessions_mutex);
-		for (auto& [id, session] : g_sessions) sessions.push_back(std::move(session));
+		lock_guard lock(g_sessions_mutex);
+		for (auto& [id, session] : g_sessions) sessions.push_back(move(session));
 		g_sessions.clear();
 	}
 	for (const auto& session : sessions) session->close();

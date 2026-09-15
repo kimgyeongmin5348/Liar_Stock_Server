@@ -1,31 +1,28 @@
 #include "workerthread.h"
 
 HANDLE g_hIOCP = nullptr;
-std::unordered_map<std::uint64_t, std::shared_ptr<SESSION>> g_sessions;
-std::mutex g_sessions_mutex;
-std::mutex g_log_mutex;
+unordered_map<uint64_t, shared_ptr<SESSION>> g_sessions;
+mutex g_sessions_mutex;
+mutex g_log_mutex;
 SOCKET g_listen_socket = INVALID_SOCKET;
-std::atomic_bool g_running{ true };
+atomic_bool g_running{ true };
 
-namespace
+atomic_uint64_t g_next_session_id = 0;
+
+bool is_expected_disconnect_error(int error)
 {
-	std::atomic_uint64_t g_next_session_id{ 0 };
-
-	bool is_expected_disconnect_error(int error)
-	{
-		return error == ERROR_NETNAME_DELETED || error == WSAECONNABORTED ||
-			error == WSAECONNRESET || error == WSA_OPERATION_ABORTED;
-	}
+	return error == ERROR_NETNAME_DELETED || error == WSAECONNABORTED ||
+		error == WSAECONNRESET || error == WSA_OPERATION_ABORTED;
 }
 
-EXP_OVER::EXP_OVER(IO_OP op, std::shared_ptr<SESSION> owner)
-	: _io_op(op), _owner(std::move(owner))
+EXP_OVER::EXP_OVER(IO_OP op, shared_ptr<SESSION> owner)
+	: _io_op(op), _owner(move(owner))
 {
 	_wsabuf.buf = reinterpret_cast<char*>(_buffer.data());
 	_wsabuf.len = static_cast<ULONG>(_buffer.size());
 }
 
-SESSION::SESSION(std::uint64_t session_id, SOCKET socket)
+SESSION::SESSION(uint64_t session_id, SOCKET socket)
 	: _socket(socket), _id(session_id)
 {
 	BOOL enabled = TRUE;
@@ -57,7 +54,7 @@ void SESSION::do_recv()
 	DWORD flags = 0;
 	int result;
 	{
-		std::lock_guard lock(_socket_mutex);
+		lock_guard lock(_socket_mutex);
 		if (_socket == INVALID_SOCKET || _closing.load()) {
 			delete context;
 			return;
@@ -76,12 +73,12 @@ void SESSION::do_recv()
 	}
 }
 
-void SESSION::do_send(const void* packet, std::size_t packet_size)
+void SESSION::do_send(const void* packet, size_t packet_size)
 {
 	if (packet == nullptr || packet_size < sizeof(PacketHeader) ||
 		packet_size > MAX_PACKET_SIZE || _closing.load()) return;
 
-	std::lock_guard lock(_send_mutex);
+	lock_guard lock(_send_mutex);
 	if (_closing.load()) return;
 
 	const auto* byte_ptr = reinterpret_cast<const unsigned char*>(packet);
@@ -103,7 +100,7 @@ void SESSION::send_next_locked()
 	const auto& front_packet = _send_queue.front();
 
 	auto* context = new EXP_OVER(IO_OP::SEND, shared_from_this());
-	std::memcpy(context->_buffer.data(), front_packet.data(), front_packet.size());
+	memcpy(context->_buffer.data(), front_packet.data(), front_packet.size());
 	context->_wsabuf.buf = reinterpret_cast<char*>(context->_buffer.data());
 	context->_wsabuf.len = static_cast<ULONG>(front_packet.size());
 	context->_send_size = front_packet.size();
@@ -111,7 +108,7 @@ void SESSION::send_next_locked()
 
 	int result;
 	{
-		std::lock_guard lock(_socket_mutex);
+		lock_guard lock(_socket_mutex);
 		if (_socket == INVALID_SOCKET || _closing.load()) {
 			delete context;
 			_is_sending = false;
@@ -132,7 +129,7 @@ void SESSION::send_next_locked()
 	}
 }
 
-bool SESSION::on_send_complete(std::size_t transferred, EXP_OVER* context)
+bool SESSION::on_send_complete(size_t transferred, EXP_OVER* context)
 {
 	if (transferred == 0 || _closing.load()) {
 		CloseSession(_id);
@@ -148,7 +145,7 @@ bool SESSION::on_send_complete(std::size_t transferred, EXP_OVER* context)
 
 		int result;
 		{
-			std::lock_guard lock(_socket_mutex);
+			lock_guard lock(_socket_mutex);
 			if (_socket == INVALID_SOCKET || _closing.load()) return false;
 			result = WSASend(_socket, &context->_wsabuf, 1, nullptr, 0,
 				&context->_over, nullptr);
@@ -161,7 +158,7 @@ bool SESSION::on_send_complete(std::size_t transferred, EXP_OVER* context)
 		return false;
 	}
 
-	std::lock_guard lock(_send_mutex);
+	lock_guard lock(_send_mutex);
 	if (!_send_queue.empty()) {
 		_send_queue.pop();
 	}
@@ -169,7 +166,7 @@ bool SESSION::on_send_complete(std::size_t transferred, EXP_OVER* context)
 	return false;
 }
 
-void SESSION::process_packet(const unsigned char* packet, std::size_t packet_size)
+void SESSION::process_packet(const unsigned char* packet, size_t packet_size)
 {
 	if (packet_size < sizeof(PacketHeader)) return;
 
@@ -178,15 +175,15 @@ void SESSION::process_packet(const unsigned char* packet, std::size_t packet_siz
 	case PacketType::CS_PING:
 	{
 		const PacketHeader pong{
-			static_cast<std::uint8_t>(sizeof(PacketHeader)),
-			static_cast<std::uint8_t>(PacketType::SC_PONG)
+			static_cast<uint8_t>(sizeof(PacketHeader)),
+			static_cast<uint8_t>(PacketType::SC_PONG)
 		};
 		do_send(&pong, sizeof(pong));
 		break;
 	}
 	default:
-		std::lock_guard log_lock(g_log_mutex);
-		std::cerr << "[WARN] unknown packet type=" << static_cast<unsigned>(packet[1])
+		lock_guard log_lock(g_log_mutex);
+		cerr << "[WARN] unknown packet type=" << static_cast<unsigned>(packet[1])
 			<< " session=" << _id << '\n';
 		break;
 	}
@@ -197,13 +194,13 @@ void SESSION::close()
 	if (_closing.exchange(true)) return;
 
 	{
-		std::lock_guard lock(_send_mutex);
-		std::queue<std::vector<unsigned char>> empty;
-		std::swap(_send_queue, empty);
+		lock_guard lock(_send_mutex);
+		queue<vector<unsigned char>> empty;
+		swap(_send_queue, empty);
 		_is_sending = false;
 	}
 
-	std::lock_guard lock(_socket_mutex);
+	lock_guard lock(_socket_mutex);
 	if (_socket != INVALID_SOCKET) {
 		shutdown(_socket, SD_BOTH);
 		closesocket(_socket);
@@ -211,29 +208,29 @@ void SESSION::close()
 	}
 }
 
-void CloseSession(std::uint64_t id)
+void CloseSession(uint64_t id)
 {
-	std::shared_ptr<SESSION> session;
-	std::size_t remaining = 0;
+	shared_ptr<SESSION> session;
+	size_t remaining = 0;
 	{
-		std::lock_guard lock(g_sessions_mutex);
+		lock_guard lock(g_sessions_mutex);
 		const auto it = g_sessions.find(id);
 		if (it == g_sessions.end()) return;
-		session = std::move(it->second);
+		session = move(it->second);
 		g_sessions.erase(it);
 		remaining = g_sessions.size();
 	}
 
 	session->close();
-	std::lock_guard log_lock(g_log_mutex);
-	std::cout << "[DISCONNECT] session=" << id << " remaining=" << remaining << '\n';
+	lock_guard log_lock(g_log_mutex);
+	cout << "[DISCONNECT] session=" << id << " remaining=" << remaining << '\n';
 }
 
-void BroadcastToAll(const void* packet, std::size_t packet_size, std::uint64_t exclude_id)
+void BroadcastToAll(const void* packet, size_t packet_size, uint64_t exclude_id)
 {
-	std::vector<std::shared_ptr<SESSION>> sessions;
+	vector<shared_ptr<SESSION>> sessions;
 	{
-		std::lock_guard lock(g_sessions_mutex);
+		lock_guard lock(g_sessions_mutex);
 		sessions.reserve(g_sessions.size());
 		for (const auto& [id, session] : g_sessions) {
 			if (id != exclude_id && !session->is_closing()) sessions.push_back(session);
@@ -249,13 +246,13 @@ void print_error_message(const char* operation, int error)
 		FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, error, 0,
 		reinterpret_cast<char*>(&message), 0, nullptr);
 
-	std::lock_guard log_lock(g_log_mutex);
-	std::cerr << "[ERROR] " << operation << " failed (" << error << ")";
+	lock_guard log_lock(g_log_mutex);
+	cerr << "[ERROR] " << operation << " failed (" << error << ")";
 	if (message != nullptr) {
-		std::cerr << ": " << message;
+		cerr << ": " << message;
 		LocalFree(message);
 	}
-	std::cerr << '\n';
+	cerr << '\n';
 }
 
 bool do_accept(SOCKET listen_socket)
@@ -299,7 +296,7 @@ void WorkerThread()
 			continue;
 		}
 
-		std::unique_ptr<EXP_OVER> context(reinterpret_cast<EXP_OVER*>(overlapped));
+		unique_ptr<EXP_OVER> context(reinterpret_cast<EXP_OVER*>(overlapped));
 		if (!success) {
 			const int error = GetLastError();
 			if (context->_io_op == IO_OP::ACCEPT) {
@@ -326,7 +323,7 @@ void WorkerThread()
 				break;
 			}
 
-			const std::uint64_t id = ++g_next_session_id;
+			const uint64_t id = ++g_next_session_id;
 			if (CreateIoCompletionPort(reinterpret_cast<HANDLE>(client_socket), g_hIOCP,
 				static_cast<ULONG_PTR>(id), 0) == nullptr) {
 				print_error_message("CreateIoCompletionPort(client)", GetLastError());
@@ -335,10 +332,10 @@ void WorkerThread()
 				break;
 			}
 
-			auto session = std::make_shared<SESSION>(id, client_socket);
+			auto session = make_shared<SESSION>(id, client_socket);
 			bool accepted = false;
 			{
-				std::lock_guard lock(g_sessions_mutex);
+				lock_guard lock(g_sessions_mutex);
 				if (g_sessions.size() < MAX_USER) {
 					g_sessions.emplace(id, session);
 					accepted = true;
@@ -350,8 +347,8 @@ void WorkerThread()
 				break;
 			}
 			{
-				std::lock_guard log_lock(g_log_mutex);
-				std::cout << "[ACCEPT] session=" << id << '\n';
+				lock_guard log_lock(g_log_mutex);
+				cout << "[ACCEPT] session=" << id << '\n';
 			}
 			session->start();
 			if (g_running.load()) do_accept(g_listen_socket);
@@ -377,13 +374,13 @@ void WorkerThread()
 				break;
 			}
 
-			const std::size_t total_size = context->_buffered + transferred;
-			std::size_t offset = 0;
+			const size_t total_size = context->_buffered + transferred;
+			size_t offset = 0;
 			bool malformed = false;
 			while (offset < total_size) {
-				const std::size_t available = total_size - offset;
+				const size_t available = total_size - offset;
 				if (available < sizeof(PacketHeader)) break;
-				const std::size_t packet_size = context->_buffer[offset];
+				const size_t packet_size = context->_buffer[offset];
 				if (packet_size < sizeof(PacketHeader) || packet_size > MAX_PACKET_SIZE) {
 					malformed = true;
 					break;
@@ -393,13 +390,13 @@ void WorkerThread()
 				offset += packet_size;
 			}
 
-			const std::size_t remaining = total_size - offset;
+			const size_t remaining = total_size - offset;
 			if (malformed || remaining >= context->_buffer.size()) {
 				CloseSession(session->id());
 				break;
 			}
 			if (remaining > 0) {
-				std::memmove(context->_buffer.data(), context->_buffer.data() + offset, remaining);
+				memmove(context->_buffer.data(), context->_buffer.data() + offset, remaining);
 			}
 			context->_buffered = remaining;
 			context->_wsabuf.buf = reinterpret_cast<char*>(context->_buffer.data() + remaining);
@@ -409,7 +406,7 @@ void WorkerThread()
 			int result;
 			DWORD flags = 0;
 			{
-				std::lock_guard lock(session->_socket_mutex);
+				lock_guard lock(session->_socket_mutex);
 				if (session->_socket == INVALID_SOCKET || session->_closing.load()) break;
 				result = WSARecv(session->_socket, &context->_wsabuf, 1, nullptr, &flags,
 					&context->_over, nullptr);
